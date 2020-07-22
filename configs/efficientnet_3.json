@@ -1,0 +1,37 @@
+{
+  "model": "efficientnet-b5",
+  "train_batch_size": 24,
+  "test_batch_size": 24,
+  "lr": 0.00012,
+  "optimizer": "Adam",
+  "momentum": 0.9,
+  "image_size": 256,
+  "num_classes": 3,
+  "labels": [
+    "0~10",
+    "10~20",
+    "20+"
+  ],
+  "train_data_path": [
+    "/data/gukedata/train_data/0-10",
+    "/data/gukedata/train_data/11-15",
+    "/data/gukedata/train_data/16-20",
+    "/data/gukedata/train_data/21-25",
+    "/data/gukedata/train_data/26-45",
+    "/data/gukedata/train_data/46-",
+    "/data/gukedata/test_data/0-10",
+    "/data/gukedata/test_data/11-15",
+    "/data/gukedata/test_data/16-20",
+    "/data/gukedata/test_data/21-25",
+    "/data/gukedata/test_data/26-45",
+    "/data/gukedata/test_data/46-"
+  ],
+  "test_data_path": [
+    "/data/gukedata/test_data/0-10",
+    "/data/gukedata/test_data/11-15",
+    "/data/gukedata/test_data/16-20",
+    "/data/gukedata/test_data/21-25",
+    "/data/gukedata/test_data/26-45",
+    "/data/gukedata/test_data/46-"
+  ]
+}
