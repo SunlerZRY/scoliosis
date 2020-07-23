@@ -60,11 +60,12 @@ for index, row in df.iterrows():
         if degree == -1 or second_degree == -1:
             continue
 
-        labels_list.append({"img_path": img_path,
+        labels_list.append({"id": row['病人ID'],
+                            "img_path": img_path,
                             "bbox": result,
-                            "degree": (row['主弯度数']),
+                            "degree": degree,
                             "tip_cone": row['主弯顶椎'],
-                            "second_degree": row['次弯度数'],
+                            "second_degree": second_degree,
                             "second_tip_cone": row['次弯顶椎'],
                             "type": row['类型']})
     else:
