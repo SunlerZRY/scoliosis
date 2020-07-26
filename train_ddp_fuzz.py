@@ -19,18 +19,17 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from efficientnet_pytorch import EfficientNet
-import model.densenet as densenet
 import matplotlib.pyplot as plt
-from sklearn.metrics import r2_score
 
 import apex
 from apex import amp, optimizers
 from apex.parallel import DistributedDataParallel as DDP
 
-# from model.mixup import mixup_criterion, mixup_data
-from data.DegreesData_recon import DegreesData  # noqa
+from model.mixup import mixup_criterion, mixup_data
+from data.DegreesData import DegreesData  # noqa
 from model.utils import (AverageMeter, ConfusionMatrix,
                          plot_confusion_matrix)
+from model.loss import LabelSmoothingLoss
 
 
 torch.manual_seed(0)
@@ -47,7 +46,7 @@ parser.add_argument('--cfg_path', '-c', default='./configs/efficientnet.json', m
 parser.add_argument('--ckpt_path_save', '-ckpt_s',
                     default='/data/gukedata/ckpt/', help='checkpoint path to save')
 parser.add_argument('--log_path', '-lp',
-                    default='/data/gukedata/log_recon/', help='log path')
+                    default='/data/gukedata/log_fuzz/', help='log path')
 parser.add_argument('--num_workers', default=12, type=int,
                     help='number of workers for each data loader, default 2.')
 parser.add_argument('--device_ids', default='0,1,2,3', type=str, help='comma separated indices of GPU to use,'
@@ -65,7 +64,8 @@ parser.add_argument('--experiment_id', '-eid',
                     default='0', help='experiment id')
 parser.add_argument('--experiment_name', '-name',
                     default='pre_efficientnet_b7', help='experiment name')
-
+parser.add_argument('--alpha', default=0, type=float,
+                    help='interpolation strength (uniform=1., ERM=0.)')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
 parser.add_argument('--schedule', default=[60, 100, 120], nargs='*', type=int,
@@ -116,21 +116,25 @@ class data_prefetcher():
 
     def preload(self):
         try:
-            self.next_input, self.next_target = next(self.loader)
+            self.next_input, self.next_target, self.next_mask = next(
+                self.loader)
         except StopIteration:
             self.next_input = None
             self.next_target = None
+            self.next_mask = None
             return
         with torch.cuda.stream(self.stream):
             self.next_input = self.next_input.cuda(non_blocking=True)
-            self.next_target = self.next_target.cuda(non_blocking=True)
+            self.next_target = self.next_target.cuda(non_blocking=True).long()
+            self.next_mask = self.next_mask.cuda(non_blocking=True)
 
     def next(self):
         torch.cuda.current_stream().wait_stream(self.stream)
         input = self.next_input
         target = self.next_target
+        mask = self.next_mask
         self.preload()
-        return input, target
+        return input, target, mask
 
 
 def reduce_tensor(tensor, reduction=True):
@@ -151,8 +155,11 @@ def to_python_float(t):
 def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, dataloader_train, cfg):
     model.train()
     num_classes = cfg['num_classes']
+    class_point = cfg['class_point']
+
     train_loss = AverageMeter()
     train_acc = AverageMeter()
+    confusion_matrix = ConfusionMatrix(num_classes=num_classes)
 
     steps = len(dataloader_train)
     batch_size = dataloader_train.batch_size
@@ -167,19 +174,27 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
     if args.local_rank == 0:
         print("steps:", steps)
     prefetcher = data_prefetcher(dataiter)
-    img, target = prefetcher.next()
+    img, target, mask = prefetcher.next()
     for step in range(steps):
         data = img.to(device)
         target = target.to(device)
 
+        # # mixup
+        # # generate mixed inputs, two one-hot label vectors and mixing coefficient
+        # data, target_a, target_b, lam = mixup_data(
+        #     data, target, args.alpha, use_cuda)
+        # print(data.shape)
         output = model(data)
-        output = F.relu(output)
-        output = output.view(img.size(0), num_classes)
-        target = target.view(img.size(0), num_classes)
-        # print(output[:, 1].shape)
-        # output = output.view(int(batch_size))
-        loss = loss_fn(output[:, 0], target[:, 0]) + \
-            0.5*loss_fn(output[:, 1], target[:, 1])
+        output = output.view(int(batch_size), num_classes)
+        target = target.view(int(batch_size))
+        mask = mask.view(int(batch_size))
+        # target = target.long()
+
+        conf_targets = target[mask]
+        conf_preds = output[mask]
+        # print("conf_preds", conf_preds.shape)
+        loss = loss_fn(conf_preds, conf_targets)
+        # loss = loss_func(loss_fn, output)
 
         optimizer.zero_grad()
         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -189,14 +204,21 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
         torch.cuda.synchronize()
         # scheduler.step()
         # lr = scheduler.get_last_lr()[0]
-        target_class = ((target[:, 0])*3 >= 15)
-        predicts_class = ((output[:, 0])*3 >= 15)
+        probs = F.softmax(output, dim=1)
+        # torch.max(a,1) 返回每一行中最大值的那个元素FloatTensor，且返回其索引LongTensor（返回最大元素在这一行的列索引）
+        _, predicts = torch.max(probs, 1)
 
-        acc = (predicts_class == target_class).type(
-            torch.cuda.FloatTensor).sum() * 1.0 / img.size(0)
+        # target = (target >= class_point).long()
 
-        r2 = r2_score(target.cpu().detach().numpy(),
-                      output.cpu().detach().numpy())
+        acc = (predicts[mask] == conf_targets).type(
+            torch.cuda.FloatTensor).sum() * 1.0 / conf_targets.size(0)
+        for t in range(num_classes):
+            for p in range(num_classes):
+                count = (predicts[mask][conf_targets == t] == p).type(
+                    torch.cuda.FloatTensor).sum()
+                reduced_count = reduce_tensor(count.data, reduction=False)
+
+                confusion_matrix.update(t, p, to_python_float(reduced_count))
 
         reduced_loss = reduce_tensor(loss.data)
         reduced_acc = reduce_tensor(acc.data)
@@ -210,39 +232,49 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
 
             logging.info(
                 'Epoch : {}, Step : {}, Training Loss : {:.5f}, '
-                'R2 : {:.3f}, Acc : {:.3f}, Run Time : {:.2f}'
+                'Training Acc : {:.3f}, Run Time : {:.2f}'
                 .format(
-                    summary['epoch'],
-                    summary['step'], train_loss.avg, r2, reduced_acc, time_spent))
+                    summary['epoch'] + 1,
+                    summary['step'] + 1, train_loss.avg, train_acc.avg, time_spent))
 
             summary['step'] += 1
 
-        img, target = prefetcher.next()
+        img, target, mask = prefetcher.next()
 
     if args.local_rank == 0:
         time_spent = time.time() - time_now
         time_now = time.time()
         summary_writer.add_scalar(
-            'train/loss', train_loss.avg, epoch)
+            'train/loss', train_loss.val,  epoch)
         summary_writer.add_scalar(
-            'train/R2', r2, epoch)
-        summary_writer.add_scalar(
-            'train/Acc', train_acc.avg, epoch)
+            'train/acc', train_acc.val, epoch)
         # summary_writer.add_scalar(
         #     'learning_rate', lr, summary['step'] + steps*epoch)
-        summary['epoch'] = epoch
         summary_writer.flush()
+        summary['confusion_matrix'] = plot_confusion_matrix(
+            confusion_matrix.matrix,
+            cfg['labels'],
+            tensor_name='train/Confusion matrix')
+        # summary['loss'] = train_loss.avg
+        # summary['acc'] = acc_sum / (steps * (batch_size))
+        # summary['acc'] = train_acc.avg
+        summary['epoch'] = epoch
 
     return summary
 
 
 def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid, cfg):
     model.eval()
+    num_classes = cfg['num_classes']
+    class_point = cfg['class_point']
+
     eval_loss = AverageMeter()
     eval_acc = AverageMeter()
+    confusion_matrix = ConfusionMatrix(num_classes=num_classes)
 
-    num_classes = cfg['num_classes']
     dataloader = [dataloader_valid]
+
+    name = cfg['labels']
 
     time_now = time.time()
     loss_sum = 0
@@ -258,7 +290,7 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
             acc_tmp = 0
             loss_tmp = 0
             prefetcher = data_prefetcher(dataiter)
-            img, target = prefetcher.next()
+            img, target, mask = prefetcher.next()
 
             for step in range(steps):
                 # data, target = next(dataiter)
@@ -266,22 +298,29 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
                 target = target.to(device)
 
                 output = model(data)
-                output = F.relu(output)
-                output = output.view(img.size(0), num_classes)
-                target = target.view(img.size(0), num_classes)
+                output = output.view(int(batch_size), num_classes)
+                target = target.view(int(batch_size))
+                mask = mask.view(int(batch_size))
 
-                loss = loss_fn(output[:, 0], target[:, 0]) + \
-                    0.5*loss_fn(output[:, 1], target[:, 1])
+                conf_targets = target[mask]
+                conf_preds = output[mask]
+                loss = loss_fn(conf_preds, conf_targets)
+
                 torch.cuda.synchronize()
+                probs = F.softmax(output, dim=1)
+                _, predicts = torch.max(probs, 1)
 
-                target_class = ((target[:, 0])*3 >= 15)
-                predicts_class = ((output[:, 0])*3 >= 15)
+                acc = (predicts[mask] == conf_targets).type(
+                    torch.cuda.FloatTensor).sum() * 1.0 / conf_targets.size(0)
+                for t in range(num_classes):
+                    for p in range(num_classes):
+                        count = (predicts[mask][conf_targets == t] == p).type(
+                            torch.cuda.FloatTensor).sum()
+                        reduced_count = reduce_tensor(
+                            count.data, reduction=False)
 
-                acc = (predicts_class == target_class).type(
-                    torch.cuda.FloatTensor).sum() * 1.0 / img.size(0)
-
-                r2 = r2_score(target.cpu().detach().numpy(),
-                              output.cpu().detach().numpy())
+                        confusion_matrix.update(t, p,
+                                                to_python_float(reduced_count))
 
                 reduced_loss = reduce_tensor(loss.data)
                 reduced_acc = reduce_tensor(acc.data)
@@ -290,26 +329,26 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
                 eval_acc.update(to_python_float(reduced_acc))
 
                 if args.local_rank == 0:
-                    print('target', target[:, 0]*3)
-                    print('output', output[:, 0]*3)
                     time_spent = time.time() - time_now
                     time_now = time.time()
                     logging.info(
                         'data_num : {}, Step : {}, Testing Loss : {:.5f}, '
-                        'R2 : {:.3f}, Acc : {:.3f}, Run Time : {:.2f}'
+                        'Testing Acc : {:.3f}, Run Time : {:.2f}'
                         .format(
                             str(i),
-                            summary['step'] + 1, reduced_loss, r2, reduced_acc, time_spent))
+                            summary['step'] + 1, reduced_loss, reduced_acc, time_spent))
                     summary['step'] += 1
 
-                img, target = prefetcher.next()
+                img, target, mask = prefetcher.next()
 
     if args.local_rank == 0:
-
+        summary['confusion_matrix'] = plot_confusion_matrix(
+            confusion_matrix.matrix,
+            cfg['labels'],
+            tensor_name='train/Confusion matrix')
         summary['loss'] = eval_loss.avg
         # summary['acc'] = acc_sum / (steps * (batch_size))
         summary['acc'] = eval_acc.avg
-        summary['r2'] = r2
 
     return summary
 
@@ -324,8 +363,9 @@ def adjust_learning_rate(optimizer, epoch, cfg, args):
             lr *= 0.2 if epoch >= milestone else 1.
 
     optimizer.param_groups[0]['lr'] = lr
-    for param_group in optimizer.param_groups:
-        print("param_group lr: ", param_group['lr'])
+    # if args.local_rank == 0:
+    #     for param_group in optimizer.param_groups:
+    #         print("param_group lr: ", param_group['lr'])
 
     return lr
 
@@ -341,20 +381,22 @@ def run():
     num_workers = args.num_workers
 
     model = EfficientNet.from_pretrained(
-        cfg['model'], num_classes=2)
-    # model = densenet.densenet121(
-    #     pretrained=False, num_classes=2, drop_rate=0.2)
+        cfg['model'], num_classes=cfg['num_classes'])
 
     model = apex.parallel.convert_syncbn_model(model)
 
     # model = DataParallel(model, device_ids=None)
     model = model.to(device)
-    loss_fn = nn.SmoothL1Loss().to(device)
+
+    # loss_fn = nn.CrossEntropyLoss(
+    #     weight=torch.Tensor([0.5, 0.7])).to(device)
+    loss_fn = LabelSmoothingLoss(classes=cfg['num_classes'], smoothing=0.1)
+
     # loss_fn = nn.CrossEntropyLoss().to(device)
     # loss_fn = [nn.CrossEntropyLoss().to(device), nn.SmoothL1Loss().to(device)]
     if cfg['optimizer'] == 'SGD':
         optimizer = optim.SGD(model.parameters(), lr=cfg['lr'], momentum=cfg['momentum'],
-                              weight_decay=1e-4)
+                              weight_decay=5e-4)
 
     elif cfg['optimizer'] == 'Adam':
         optimizer = optimizers.FusedAdam(model.parameters(),
@@ -379,7 +421,7 @@ def run():
         model = DDP(model, delay_allreduce=True)
 
     dataset_valid = DegreesData(
-        cfg['test_data_path'], cfg['image_size'], sample=False)
+        cfg['test_data_path'], cfg["class_point"], cfg['image_size'], sample=False)
 
     eval_sampler = torch.utils.data.distributed.DistributedSampler(
         dataset_valid)
@@ -391,7 +433,8 @@ def run():
                                   drop_last=True,
                                   shuffle=False)
 
-    summary_train = {'epoch': 0, 'step': 0}
+    summary_train = {'epoch': 0, 'step': 0,
+                     'fp': 0, 'tp': 0, 'Neg': 0, 'Pos': 0}
     summary_valid = {'loss': float('inf'), 'step': 0, 'acc': 0}
     summary_writer = None
 
@@ -405,7 +448,7 @@ def run():
         lr = adjust_learning_rate(optimizer, epoch, cfg, args)
 
         dataset_train = DegreesData(
-            cfg['train_data_path'], cfg['image_size'], istraining=True)
+            cfg['train_data_path'], cfg["class_point"], cfg['image_size'], istraining=True)
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             dataset_train)
         dataloader_train = DataLoader(dataset_train,
@@ -425,6 +468,8 @@ def run():
                             'amp': amp.state_dict()},
                            (ckpt_path_save + '/' + str(epoch) + '.ckpt'))
 
+            summary_writer.add_figure(
+                'train/confusion matrix', summary_train['confusion_matrix'], epoch)
         for param_group in optimizer.param_groups:
             lr = param_group['lr']
             if args.local_rank == 0:
@@ -440,9 +485,11 @@ def run():
                     'valid/loss', summary_valid['loss'], epoch)
                 summary_writer.add_scalar(
                     'valid/acc', summary_valid['acc'], epoch)
-                summary_writer.add_scalar(
-                    'valid/R2', summary_valid['r2'], epoch)
 
+                summary_writer.add_figure(
+                    'valid/confusion matrix', summary_valid['confusion_matrix'], epoch)
+                summary_valid['confusion_matrix'].savefig(
+                    log_path_cm+'/valid_confusion_matrix_'+str(epoch)+'.png')
         if args.local_rank == 0:
             if summary_valid['loss'] < loss_valid_best:
                 loss_valid_best = summary_valid['loss']

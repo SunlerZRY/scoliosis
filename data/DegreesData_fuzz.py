@@ -1,5 +1,6 @@
 import os
 import random
+import bisect
 
 from PIL import Image, ImageFilter
 from RandAugment import RandAugment
@@ -24,11 +25,12 @@ class GaussianBlur(object):
 
 
 class DegreesData(Dataset):
-    def __init__(self, labels_path, image_size, istraining=False, sample=True):
+    def __init__(self, labels_path, class_point, image_size, istraining=False, sample=True):
         normalize = transforms.Normalize(mean=[0.4771, 0.4769, 0.4355],
                                          std=[0.2189, 0.1199, 0.1717])
         self.istraining = istraining
         self.images = dd.io.load(labels_path)
+        group_list, self.samples = self.get_group_list(class_point, sample)
 
         if istraining:
             self.transform = transforms.Compose([
@@ -52,30 +54,56 @@ class DegreesData(Dataset):
                 normalize,
             ])
 
-        print(len(self.images))
+        print(len(self.images), len(self.samples))
 
-    def sample_filter(self):
+    def get_group_list(self, class_point, sample):
+        """[summary]
+
+        Parameters
+        ----------
+        class_point : list
+            like [10, 15, 20]
+        sample : bool
+            if use sampling to balance the group
+
+        Returns
+        -------
+        [type]
+            [description]
+        """
+        group_file_list = {
+        }
+        class_num = 2
+        for i in range(class_num):
+            group_file_list[str(i)] = []
+
+        for img_dir in self.images:
+            label_degree = img_dir['degree']
+            label = bisect.bisect_left([class_point], label_degree)
+
+            group_file_list[str(label)].append(img_dir)
+
         samples = []
-        for i in self.images:
-            if i['degree'] <= 50:
-                samples.append(i)
-        return samples
+        labels = []
+        if sample:
+            sample_num = min([len(n) for k, n in group_file_list.items()])
+            for k, p in group_file_list.items():
+                samples.extend(random.sample(p, int(sample_num)))
+        else:
+            for k, p in group_file_list.items():
+                samples.extend(p)
 
-    def smooth_label(self, label, threshold=30):
-        if label > threshold:
-            # TODO: make label smooth
-            label = threshold+(label-threshold)*
+        return group_file_list, samples
 
     def __len__(self):
-        return len(self.images)
+        return len(self.samples)
 
     def __getitem__(self, index):
-        file = self.images[index]
+        file = self.samples[index]
 
         img = Image.open(file['img_path'])
         cropbox = file['bbox']
-        label = float(file['degree'])/3.0
-        second_label = float(file['second_degree'])/3.0
+        label_degree = file['degree']
 
         try:
             img = img.crop(cropbox)  # 后面可以追加更复杂的裁剪算法
@@ -84,11 +112,8 @@ class DegreesData(Dataset):
         except IOError:
             print(file)
             raise IOError("File is error, ", file)
-        # for k in self.group_file_list.keys():
-        #     if file in self.group_file_list[k]:
-        #         label = k
 
-        return img, torch.Tensor([label, second_label])
+        return img, float(label_degree)
 
 
 # listDirs = ['/home/hdc/yhf/Guke2/0-10', '/home/hdc/yhf/Guke2/11-15',

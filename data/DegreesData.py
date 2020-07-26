@@ -1,14 +1,17 @@
 import os
 import random
+import bisect
 
 from PIL import Image, ImageFilter
+import xml.dom.minidom
+import numpy as np
 from RandAugment import RandAugment
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
 import deepdish as dd
 
-from .CutPicture import cutPicture
+# from .CutPicture import get_box
 
 
 class GaussianBlur(object):
@@ -24,11 +27,29 @@ class GaussianBlur(object):
 
 
 class DegreesData(Dataset):
-    def __init__(self, class_dirs, image_size, istraining=False, sample=True):
+    def __init__(self, labels_path, class_point, image_size, istraining=False, sample=True):
         normalize = transforms.Normalize(mean=[0.4771, 0.4769, 0.4355],
                                          std=[0.2189, 0.1199, 0.1717])
         self.istraining = istraining
+        self.images = dd.io.load(labels_path)
+        self.class_point = class_point
+        group_list, self.samples = self.get_group_list_2(class_point, sample)
+
         if istraining:
+            class_dirs = [
+                "/data/gukedata/train_data/0-10",
+                "/data/gukedata/train_data/11-15",
+                "/data/gukedata/train_data/16-20",
+                "/data/gukedata/train_data/21-25",
+                "/data/gukedata/train_data/26-45",
+                "/data/gukedata/train_data/46-",
+                "/data/gukedata/test_data/0-10",
+                "/data/gukedata/test_data/11-15",
+                "/data/gukedata/test_data/16-20",
+                "/data/gukedata/test_data/21-25",
+                "/data/gukedata/test_data/26-45",
+                "/data/gukedata/test_data/46-"
+            ]
             self.transform = transforms.Compose([
                 transforms.ColorJitter(
                     64.0 / 255, 0.75, 0.25, 0.04),
@@ -42,8 +63,9 @@ class DegreesData(Dataset):
                 transforms.RandomErasing(),
                 # transforms.ToPILImage()
             ])
-            self.group_file_list, self.images, self.labels = self.get_file_list(
-                class_dirs, sample)
+            group_file_list, samples = self.get_file_list_1(class_dirs,
+                                                            sample)
+            self.samples.extend(samples)
 
         else:
             self.transform = transforms.Compose([
@@ -51,96 +73,159 @@ class DegreesData(Dataset):
                 transforms.ToTensor(),
                 normalize,
             ])
-            self.images = dd.io.load(
-                '/data/gukedata/valid_data/labels_list.h5')
-        print(len(self.images))
 
-    def get_file_list(self, class_dirs, sample):
+        print(len(self.samples))
+
+    def get_group_list_2(self, class_point, sample):
+        """[summary]
+
+        Parameters
+        ----------
+        class_point : list
+            like [10, 15, 20]
+        sample : bool
+            if use sampling to balance the group
+
+        Returns
+        -------
+        [type]
+            [description]
+        """
         group_file_list = {
-            "0": [],
-            "1": [],
-            # "2": [],
-            # "2": [],
-            # "3": [],
-            # "4": []
         }
+        class_num = len(class_point)+1
+        for i in range(class_num):
+            group_file_list[str(i)] = []
+
+        for img_dir in self.images:
+            label_degree = img_dir['degree']
+            label = bisect.bisect_left(class_point, label_degree)
+            # print(label_degree, label)
+            group_file_list[str(label)].append(img_dir)
+
+        samples = []
+        labels = []
+        tag = False
+        if sample:
+            sample_num = min([len(n) for k, n in group_file_list.items()])
+            # if k == class_num-1:
+            sample_num = int(sample_num * 3.0 / 4.0)
+            #     tag = True
+            for k, p in group_file_list.items():
+                if k == str(class_num - 1):
+                    sample_num = int(sample_num * 4.0 / 3.0) - 1
+                    # print('len', str(class_num - 1), sample_num)
+                samples.extend(random.sample(p, int(sample_num)))
+        else:
+            for k, p in group_file_list.items():
+                samples.extend(p)
+
+        return group_file_list, samples
+
+    def get_file_list_1(self, class_dirs, sample):
+        group_file_list = {'0': [],
+                           '1': [],
+                           '2': []}
 
         for class_dir in class_dirs:
             if "0-10" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
                     if '.jpg' in file or '.JPG' in file:
+                        path = os.path.join(class_dir, file)
+                        xmlFile = path.split('.')[0] + '.xml'
+                        cropbox = get_box(xmlFile)
                         group_file_list["0"].append(
-                            os.path.join(class_dir, file))
+                            {'img_path': path, 'bbox': cropbox, 'degree': 8})
             elif "11-15" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
                     if '.jpg' in file or '.JPG' in file:
-                        group_file_list["0"].append(
-                            os.path.join(class_dir, file))
+                        path = os.path.join(class_dir, file)
+                        xmlFile = path.split('.')[0] + '.xml'
+                        cropbox = get_box(xmlFile)
+                        group_file_list["1"].append(
+                            {'img_path': path, 'bbox': cropbox, 'degree': 12})
             elif "16-20" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
                     if '.jpg' in file or '.JPG' in file:
+                        path = os.path.join(class_dir, file)
+                        xmlFile = path.split('.')[0] + '.xml'
+                        cropbox = get_box(xmlFile)
                         group_file_list["1"].append(
-                            os.path.join(class_dir, file))
+                            {'img_path': path, 'bbox': cropbox, 'degree': 17})
             elif "21-25" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
                     if '.jpg' in file or '.JPG' in file:
-                        group_file_list["1"].append(
-                            os.path.join(class_dir, file))
+                        path = os.path.join(class_dir, file)
+                        xmlFile = path.split('.')[0] + '.xml'
+                        cropbox = get_box(xmlFile)
+                        group_file_list["2"].append(
+                            {'img_path': path, 'bbox': cropbox, 'degree': 22})
             elif "26-45" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
                     if '.jpg' in file or '.JPG' in file:
-                        group_file_list["1"].append(
-                            os.path.join(class_dir, file))
+                        path = os.path.join(class_dir, file)
+                        xmlFile = path.split('.')[0] + '.xml'
+                        cropbox = get_box(xmlFile)
+                        group_file_list["2"].append(
+                            {'img_path': path, 'bbox': cropbox, 'degree': 26})
             else:
                 files = os.listdir(class_dir)
                 for file in files:
                     if '.jpg' in file or '.JPG' in file:
-                        group_file_list["1"].append(
-                            os.path.join(class_dir, file))
+                        path = os.path.join(class_dir, file)
+                        xmlFile = path.split('.')[0] + '.xml'
+                        cropbox = get_box(xmlFile)
+                        group_file_list["2"].append(
+                            {'img_path': path, 'bbox': cropbox, 'degree': 26})
+        # print("group_file_list:", len(
+        #     group_file_list['0']), len(group_file_list['1']), len(group_file_list['2']))
 
-        sample_path = []
+        samples = []
         labels = []
+        tag = False
         if sample:
             sample_num = min([len(n) for k, n in group_file_list.items()])
+            # print(sample_num)
+            sample_num = int((sample_num * 3.0) / 4.0)
+            # print('3/4', sample_num)
             for k, p in group_file_list.items():
-                sample_path.extend(random.sample(p, int(sample_num)))
-                labels.extend([k]*int(sample_num))
+                if k == '2':
+                    sample_num = int((sample_num * 4.0) / 3.0) - 1
+                    # print('len of 2', sample_num)
+                samples.extend(random.sample(p, int(sample_num)))
         else:
             for k, p in group_file_list.items():
-                sample_path.extend(p)
-                labels.extend([k]*len(p))
-
-        return group_file_list, sample_path, labels
+                samples.extend(p)
+        # print(len(samples))
+        return group_file_list, samples
 
     def __len__(self):
-        return len(self.images)
+        return len(self.samples)
 
     def __getitem__(self, index):
-        file = self.images[index]
-        if self.istraining:
-            xmlFile = file.split('.')[0] + '.xml'
-            img, cropbox = cutPicture(file, xmlFile)
-            label = self.labels[index]
-        else:
-            img = Image.open(file['img_path'])
-            cropbox = file['bbox']
-            label_degree = file['degree']
+        file = self.samples[index]
 
-            if label_degree >= 15:
-                label = 1
-            # elif label_degree < 20 and label_degree > 10:
-            #     label = 1
-            else:
-                label = 0
+        img = Image.open(file['img_path'])
+        cropbox = file['bbox']
+        label_degree = file['degree']
 
         try:
             img = img.crop(cropbox)  # 后面可以追加更复杂的裁剪算法
             img = self.transform(img)
+
+            label = bisect.bisect_left(self.class_point, label_degree)
+            # print(label, label_degree)
+            for p in self.class_point:
+                if label_degree in range(p-1, p+2):
+                    mask = True
+                    # print(label_degree)
+                else:
+                    mask = True
 
         except IOError:
             print(file)
@@ -149,21 +234,59 @@ class DegreesData(Dataset):
         #     if file in self.group_file_list[k]:
         #         label = k
 
-        return img, int(label)
+        return img, int(label), mask
 
+
+def get_box(xmlFile):
+    DomTree = xml.dom.minidom.parse(xmlFile)
+    annotation = DomTree.documentElement
+    objectlist = annotation.getElementsByTagName('object')
+    for objects in objectlist:
+        namelist = objects.getElementsByTagName('name')
+        objectname = namelist[0].childNodes[0].data
+        bndbox = objects.getElementsByTagName('bndbox')
+        cropboxes = []
+        for box in bndbox:
+            x1_list = box.getElementsByTagName('xmin')
+            x1 = int(x1_list[0].childNodes[0].data)
+            y1_list = box.getElementsByTagName('ymin')
+            y1 = int(y1_list[0].childNodes[0].data)
+            x2_list = box.getElementsByTagName('xmax')
+            x2 = int(x2_list[0].childNodes[0].data)
+            y2_list = box.getElementsByTagName('ymax')
+            y2 = int(y2_list[0].childNodes[0].data)
+            w = x2 - x1
+            h = y2 - y1
+            obj = np.array([x1, y1, x2, y2])
+            shift = np.array([[1, 1, 1, 1]])
+            XYmatrix = np.tile(obj, (1, 1))
+            cropboxes = XYmatrix * shift
+
+            for cropbox in cropboxes:
+                # img = img.crop(cropbox)
+                # img = img.resize((scale, scale), Image.NEAREST)  # 长宽都为scale
+                return cropbox
 
 # listDirs = ['/home/hdc/yhf/Guke2/0-10', '/home/hdc/yhf/Guke2/11-15',
 #             '/home/hdc/yhf/Guke2/16-20', '/home/hdc/yhf/Guke2/21-25',
 #             '/home/hdc/yhf/Guke2/26-45', '/home/hdc/yhf/Guke2/46-']
 
-# train_dataset = DegreesData(class_dirs=listDirs)
 
-# train_loader = DataLoader(train_dataset, batch_size=10, shuffle=False)
+# train_dataset = DegreesData(
+#     "/data/gukedata/org_data/train_labels_list.h5", [10, 20], 255, istraining=True, sample=True)
+
+# train_loader = DataLoader(train_dataset, batch_size=100, shuffle=True)
 
 # print(len(train_loader))
 # print("==============")
-
+# n0 = 0
+# n1 = 0
+# n2 = 0
 # for i_batch, batch_data in enumerate(train_loader):
 #     print(i_batch)
-#     image, label = batch_data
-#     print(image.shape, label)
+
+#     image, label, mask = batch_data
+#     n0 += int((label == 0).sum())
+#     n1 += int((label == 1).sum())
+#     n2 += int((label == 2).sum())
+#     print(image.shape, label, n0, n1, n2)
