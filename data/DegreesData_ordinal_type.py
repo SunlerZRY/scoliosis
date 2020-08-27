@@ -36,20 +36,7 @@ class DegreesData(Dataset):
         group_list, self.samples = self.get_group_list_2(class_point, sample)
 
         if istraining:
-            class_dirs = [
-                "/data/gukedata/train_data/0-10",
-                "/data/gukedata/train_data/11-15",
-                "/data/gukedata/train_data/16-20",
-                "/data/gukedata/train_data/21-25",
-                "/data/gukedata/train_data/26-45",
-                "/data/gukedata/train_data/46-",
-                "/data/gukedata/test_data/0-10",
-                "/data/gukedata/test_data/11-15",
-                "/data/gukedata/test_data/16-20",
-                "/data/gukedata/test_data/21-25",
-                "/data/gukedata/test_data/26-45",
-                "/data/gukedata/test_data/46-"
-            ]
+
             self.transform = transforms.Compose([
                 transforms.ColorJitter(
                     64.0 / 255, 0.75, 0.25, 0.04),
@@ -125,7 +112,9 @@ class DegreesData(Dataset):
     def get_file_list_1(self, class_dirs, sample):
         group_file_list = {'0': [],
                            '1': [],
-                           '2': []}
+                           '2': [],
+                           '3': [],
+                           '4': []}
 
         for class_dir in class_dirs:
             if "0-10" in class_dir:
@@ -136,7 +125,7 @@ class DegreesData(Dataset):
                         xmlFile = path.split('.')[0] + '.xml'
                         cropbox = get_box(xmlFile)
                         group_file_list["0"].append(
-                            {'img_path': path, 'bbox': cropbox, 'degree': 8})
+                            {'img_path': path, 'bbox': cropbox, 'degree': 8, 'type': '/'})
             elif "11-15" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
@@ -145,7 +134,7 @@ class DegreesData(Dataset):
                         xmlFile = path.split('.')[0] + '.xml'
                         cropbox = get_box(xmlFile)
                         group_file_list["1"].append(
-                            {'img_path': path, 'bbox': cropbox, 'degree': 12})
+                            {'img_path': path, 'bbox': cropbox, 'degree': 12, 'type': 'o'})
             elif "16-20" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
@@ -153,8 +142,8 @@ class DegreesData(Dataset):
                         path = os.path.join(class_dir, file)
                         xmlFile = path.split('.')[0] + '.xml'
                         cropbox = get_box(xmlFile)
-                        group_file_list["1"].append(
-                            {'img_path': path, 'bbox': cropbox, 'degree': 17})
+                        group_file_list["2"].append(
+                            {'img_path': path, 'bbox': cropbox, 'degree': 17, 'type': 'o'})
             elif "21-25" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
@@ -162,8 +151,8 @@ class DegreesData(Dataset):
                         path = os.path.join(class_dir, file)
                         xmlFile = path.split('.')[0] + '.xml'
                         cropbox = get_box(xmlFile)
-                        group_file_list["2"].append(
-                            {'img_path': path, 'bbox': cropbox, 'degree': 22})
+                        group_file_list["3"].append(
+                            {'img_path': path, 'bbox': cropbox, 'degree': 22, 'type': 'o'})
             elif "26-45" in class_dir:
                 files = os.listdir(class_dir)
                 for file in files:
@@ -171,17 +160,17 @@ class DegreesData(Dataset):
                         path = os.path.join(class_dir, file)
                         xmlFile = path.split('.')[0] + '.xml'
                         cropbox = get_box(xmlFile)
-                        group_file_list["2"].append(
-                            {'img_path': path, 'bbox': cropbox, 'degree': 26})
-            else:
-                files = os.listdir(class_dir)
-                for file in files:
-                    if '.jpg' in file or '.JPG' in file:
-                        path = os.path.join(class_dir, file)
-                        xmlFile = path.split('.')[0] + '.xml'
-                        cropbox = get_box(xmlFile)
-                        group_file_list["2"].append(
-                            {'img_path': path, 'bbox': cropbox, 'degree': 26})
+                        group_file_list["4"].append(
+                            {'img_path': path, 'bbox': cropbox, 'degree': 26, 'type': 'o'})
+            # else:
+            #     files = os.listdir(class_dir)
+            #     for file in files:
+            #         if '.jpg' in file or '.JPG' in file:
+            #             path = os.path.join(class_dir, file)
+            #             xmlFile = path.split('.')[0] + '.xml'
+            #             cropbox = get_box(xmlFile)
+            #             group_file_list["4"].append(
+            #                 {'img_path': path, 'bbox': cropbox, 'degree': 46})
         # print("group_file_list:", len(
         #     group_file_list['0']), len(group_file_list['1']), len(group_file_list['2']))
 
@@ -218,23 +207,38 @@ class DegreesData(Dataset):
             img = img.crop(cropbox)  # 后面可以追加更复杂的裁剪算法
             img = self.transform(img)
 
-            label = bisect.bisect_left(self.class_point, label_degree)
-            # print(label, label_degree)
-            # for p in self.class_point:
-            #     if label_degree in range(p-1, p+2):
-            #         mask = True
-            #         # print(label_degree)
-            #     else:
-            #         mask = True
+            label = bisect.bisect_right(self.class_point, label_degree)
 
         except IOError:
             print(file)
             raise IOError("File is error, ", file)
-        # for k in self.group_file_list.keys():
-        #     if file in self.group_file_list[k]:
-        #         label = k
 
-        return img, int(label)
+        labels = [0]*(len(self.class_point))
+        for i in range(label):
+            labels[i] = 1
+
+        mask = True
+        types = 0
+        if file['type'] is 'o':
+            mask = False
+        if file['type'] is '/' and label_degree > 9:
+            mask = False
+        if file['type'] is '四弯' or '半椎体' or '上胸弯':
+            mask = False
+        if file['type'] is '胸弯':
+            types = 0
+        elif file['type'] is '腰弯':
+            types = 1
+        elif file['type'] is '胸腰弯':
+            types = 2
+        elif file['type'] is '双弯':
+            types = 3
+        elif file['type'] is '三弯':
+            types = 4
+        elif mask == True:
+            print("Error!!!!! file['type']:", file['type'])
+
+        return img, torch.Tensor(labels), label, label_degree, types, mask
 
 
 def get_box(xmlFile):

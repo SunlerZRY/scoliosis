@@ -1,0 +1,33 @@
+{
+  "model": "efficientnet-b7",
+  "train_batch_size": 24,
+  "test_batch_size": 24,
+  "lr": 0.0002,
+  "optimizer": "Adam",
+  "momentum": 0.9,
+  "image_size": 256,
+  "num_classes": 2,
+  "class_point": [
+    10,
+    20
+  ],
+  "labels1": [
+    "0~10",
+    "10~20",
+    "20+"
+  ],
+  "labels2": [
+    "胸弯",
+    "腰弯",
+    "胸腰弯",
+    "双弯",
+    "三弯",
+    "无"
+  ],
+  "pos_weight": [
+    2.5,
+    4
+  ],
+  "train_data_path": "/data/gukedata/org_data/train_labels_list.h5",
+  "test_data_path": "/data/gukedata/valid_data/valid_labels_list.h5"
+}
