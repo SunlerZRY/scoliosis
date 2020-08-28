@@ -11,6 +11,8 @@ from torchvision import transforms
 import torch
 import deepdish as dd
 
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 # from .CutPicture import get_box
 
 
@@ -27,7 +29,7 @@ class GaussianBlur(object):
 
 
 class DegreesData(Dataset):
-    def __init__(self, labels_path, class_point, image_size, istraining=False, sample=True):
+    def __init__(self, labels_path, class_point, image_size, istraining=False, sample=True, use_old=False):
         normalize = transforms.Normalize(mean=[0.4771, 0.4769, 0.4355],
                                          std=[0.2189, 0.1199, 0.1717])
         self.istraining = istraining
@@ -36,20 +38,26 @@ class DegreesData(Dataset):
         group_list, self.samples = self.get_group_list_2(class_point, sample)
 
         if istraining:
-            class_dirs = [
-                "/data/gukedata/train_data/0-10",
-                "/data/gukedata/train_data/11-15",
-                "/data/gukedata/train_data/16-20",
-                "/data/gukedata/train_data/21-25",
-                "/data/gukedata/train_data/26-45",
-                "/data/gukedata/train_data/46-",
-                "/data/gukedata/test_data/0-10",
-                "/data/gukedata/test_data/11-15",
-                "/data/gukedata/test_data/16-20",
-                "/data/gukedata/test_data/21-25",
-                "/data/gukedata/test_data/26-45",
-                "/data/gukedata/test_data/46-"
-            ]
+            if use_old:
+                class_dirs = [
+                    "/data/gukedata/train_data/0-10",
+                    "/data/gukedata/train_data/11-15",
+                    "/data/gukedata/train_data/16-20",
+                    "/data/gukedata/train_data/21-25",
+                    "/data/gukedata/train_data/26-45",
+                    "/data/gukedata/train_data/46-",
+                    "/data/gukedata/test_data/0-10",
+                    "/data/gukedata/test_data/11-15",
+                    "/data/gukedata/test_data/16-20",
+                    "/data/gukedata/test_data/21-25",
+                    "/data/gukedata/test_data/26-45",
+                    "/data/gukedata/test_data/46-"
+                ]
+
+                group_file_list, samples = self.get_file_list_1(class_dirs,
+                                                                sample)
+                self.samples.extend(samples)
+
             self.transform = transforms.Compose([
                 transforms.ColorJitter(
                     64.0 / 255, 0.75, 0.25, 0.04),
@@ -63,9 +71,6 @@ class DegreesData(Dataset):
                 transforms.RandomErasing(),
                 # transforms.ToPILImage()
             ])
-            group_file_list, samples = self.get_file_list_1(class_dirs,
-                                                            sample)
-            self.samples.extend(samples)
 
         else:
             self.transform = transforms.Compose([
@@ -96,9 +101,17 @@ class DegreesData(Dataset):
         class_num = len(class_point)+1
         for i in range(class_num):
             group_file_list[str(i)] = []
-
+        over_bmi = 0
         for img_dir in self.images:
             label_degree = img_dir['degree']
+            bmi = img_dir['BMI']
+            if bmi == '/':
+                bmi = 0
+            else:
+                bmi = float(bmi)
+            if bmi > 25:
+                over_bmi += 1
+                continue
             label = bisect.bisect_left(class_point, label_degree)
             # print(label_degree, label)
             group_file_list[str(label)].append(img_dir)
@@ -119,7 +132,7 @@ class DegreesData(Dataset):
         else:
             for k, p in group_file_list.items():
                 samples.extend(p)
-
+        print("over BMI num:", over_bmi)
         return group_file_list, samples
 
     def get_file_list_1(self, class_dirs, sample):

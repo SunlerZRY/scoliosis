@@ -46,7 +46,7 @@ parser.add_argument('--cfg_path', '-c', default='./configs/efficientnet.json', m
 parser.add_argument('--ckpt_path_save', '-ckpt_s',
                     default='/data/gukedata/ckpt/', help='checkpoint path to save')
 parser.add_argument('--log_path', '-lp',
-                    default='/data/gukedata/log_ordinal/', help='log path')
+                    default='/data/gukedata/log/log_ordinal/', help='log path')
 parser.add_argument('--num_workers', default=12, type=int,
                     help='number of workers for each data loader, default 2.')
 parser.add_argument('--device_ids', default='0,1,2,3', type=str, help='comma separated indices of GPU to use,'

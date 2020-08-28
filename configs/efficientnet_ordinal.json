@@ -20,6 +20,6 @@
     2.5,
     4
   ],
-  "train_data_path": "/data/gukedata/org_data/train_labels_list.h5",
-  "test_data_path": "/data/gukedata/valid_data/valid_labels_list.h5"
+  "train_data_path": "/data/gukedata/org_data/train_data/train_labels_list.h5",
+  "test_data_path": "/data/gukedata/org_data/valid_data/valid_labels_list.h5"
 }

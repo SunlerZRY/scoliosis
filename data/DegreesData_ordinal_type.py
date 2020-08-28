@@ -13,6 +13,8 @@ import deepdish as dd
 
 # from .CutPicture import get_box
 
+# TODO还没写完，需要修改模型的最后输出，分别预测度数和类别
+
 
 class GaussianBlur(object):
     """Gaussian blur augmentation in SimCLR https://arxiv.org/abs/2002.05709"""
