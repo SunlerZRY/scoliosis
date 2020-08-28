@@ -221,7 +221,7 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
 
         acc = (predicts == label).type(
             torch.cuda.FloatTensor).sum() * 1.0 / label.size(0)
-        recall_pred = (predicts[label_degree >= 20] > 0).type(
+        recall_pred = (predicts[label_degree >= 20] > 1).type(
             torch.cuda.FloatTensor).sum() * 1.0
         recall_label = (label_degree >= 20).sum()
 
@@ -338,7 +338,7 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
 
                 acc = (predicts == label).type(
                     torch.cuda.FloatTensor).sum() * 1.0 / img.size(0)
-                recall_pred = (predicts[label_degree >= 20] > 0).type(
+                recall_pred = (predicts[label_degree >= 20] > 1).type(
                     torch.cuda.FloatTensor).sum() * 1.0
                 recall_label = (label_degree >= 20).sum()
 
