@@ -305,7 +305,6 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
 
 
 def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid, cfg):
-    logger = log.logger()
     model.eval()
     num_classes = cfg['num_classes']
     class_point = cfg['class_point']
@@ -358,7 +357,6 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
                 d = torch.Tensor([0] * img.size(0)
                                  ).reshape(-1, 1).to(device)
                 predicts = torch.cat((d, predicts.float()), 1)
-                logger.get_info(predicts)
                 # _, predicts = torch.max(predicts, 1)
                 predicts = MaxIndex(predicts, batch_size)
                 # logger.get_info(predicts)
