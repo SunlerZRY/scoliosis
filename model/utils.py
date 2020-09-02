@@ -7,6 +7,18 @@ import numpy as np
 
 from prettytable import PrettyTable
 
+import torch
+
+def MaxIndex(predicts, batch_size):
+    max_index = torch.Tensor([0] * int(batch_size)).cuda()
+    for idx, pre in enumerate(predicts):
+        if torch.sum(pre) == 0:
+            continue
+        else:
+            max_index[idx] = torch.argmax(pre)
+    return max_index
+
+
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""

@@ -165,8 +165,11 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
 
     train_loss = AverageMeter()
     train_acc = AverageMeter()
-    train_pred_posit = AverageMeter()
-    train_label_posit = AverageMeter()
+    train_recall_pred_20 = AverageMeter()
+    train_recall_label_20 = AverageMeter()
+    train_recall_pred_15 = AverageMeter()
+    train_recall_label_15 = AverageMeter()
+
 
     confusion_matrix = ConfusionMatrix(num_classes=(num_classes)+1)
 
@@ -217,21 +220,22 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
         predicts = (conf_preds >= 0.5)
         d = torch.Tensor([0] * int(batch_size)).reshape(-1, 1).to(device)
         predicts = torch.cat((d, predicts.float()), 1)
-        # logger.get_info(predicts)
         predicts = MaxIndex(predicts, batch_size)
-        # logger.get_info(predicts)
 
         # target = (target >= class_point).long()
 
         acc = (predicts == label).type(
             torch.cuda.FloatTensor).sum() * 1.0 / label.size(0)
 
-        # print(type(predicts), predicts[label_degree >= 20])
 
-        recall_pred = (predicts[label_degree >= 20] > 1).type(
+
+        recall_pred_20 = (predicts[label_degree >= 20] > 2).type(
             torch.cuda.FloatTensor).sum() * 1.0
-        recall_label = (label_degree >= 20).sum()
-        # print('recall_pred : {}, recall_label : {}'.format(recall_pred, recall_label))
+        recall_label_20 = (label_degree >= 20).sum()
+
+        recall_pred_15 = (predicts[label_degree >= 15] > 1).type(
+            torch.cuda.FloatTensor).sum() * 1.0
+        recall_label_15 = (label_degree >= 15).sum()
 
         for t in range(num_classes+1):
             for p in range(num_classes+1):
@@ -243,13 +247,20 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
 
         reduced_loss = reduce_tensor(loss.data)
         reduced_acc = reduce_tensor(acc.data)
-        reduced_pred_20 = reduce_tensor(recall_pred.data)
-        reduced_label_20 = reduce_tensor(recall_label)
+
+        reduced_pred_20 = reduce_tensor(recall_pred_20.data)
+        reduced_label_20 = reduce_tensor(recall_label_20)
+        reduced_pred_15 = reduce_tensor(recall_pred_15.data)
+        reduced_label_15 = reduce_tensor(recall_label_15)
+
 
         train_loss.update(to_python_float(reduced_loss))
         train_acc.update(to_python_float(reduced_acc))
-        train_pred_posit.update(to_python_float(reduced_pred_20))
-        train_label_posit.update(to_python_float(reduced_label_20))
+
+        train_recall_pred_20.update(to_python_float(reduced_pred_20))
+        train_recall_label_20.update(to_python_float(reduced_label_20))
+        train_recall_pred_15.update(to_python_float(reduced_pred_15))
+        train_recall_label_15.update(to_python_float(reduced_label_15))
 
         if args.local_rank == 0:
             time_spent = time.time() - time_now
@@ -269,12 +280,15 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
     if args.local_rank == 0:
         time_spent = time.time() - time_now
         time_now = time.time()
-        recall = train_pred_posit.sum/float(train_label_posit.sum)
+        recall_20 = train_recall_pred_20.sum/float(train_recall_label_20.sum)
+        recall_15 = train_recall_pred_15.sum / float(train_recall_label_15.sum)
+
         summary_writer.add_scalar(
             'train/loss', train_loss.val,  epoch)
         summary_writer.add_scalar(
             'train/acc', train_acc.val, epoch)
-        summary_writer.add_scalar('train/recall', recall, epoch)
+        summary_writer.add_scalar('train/recall_20', recall_20, epoch)
+        summary_writer.add_scalar('train/recall_15', recall_15, epoch)
         # summary_writer.add_scalar(
         #     'learning_rate', lr, summary['step'] + steps*epoch)
         summary_writer.flush()
@@ -286,7 +300,7 @@ def train_epoch(epoch, summary, summary_writer, model, loss_fn, optimizer, datal
         # summary['acc'] = acc_sum / (steps * (batch_size))
         # summary['acc'] = train_acc.avg
         summary['epoch'] = epoch
-        print("Recall >=20:", recall)
+        print("Recall >=20:", recall_20, "Recall >=15:", recall_15)
     return summary
 
 
@@ -298,8 +312,10 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
 
     eval_loss = AverageMeter()
     eval_acc = AverageMeter()
-    eval_pred_posit = AverageMeter()
-    eval_label_posit = AverageMeter()
+    eval_recall_pred_20 = AverageMeter()
+    eval_recall_label_20 = AverageMeter()
+    eval_recall_pred_15 = AverageMeter()
+    eval_recall_label_15 = AverageMeter()
     confusion_matrix = ConfusionMatrix(num_classes=(num_classes)+1)
 
     dataloader = [dataloader_valid]
@@ -350,9 +366,13 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
 
                 acc = (predicts == label).type(
                     torch.cuda.FloatTensor).sum() * 1.0 / img.size(0)
-                recall_pred = (predicts[label_degree >= 20] > 1).type(
+                recall_pred_20 = (predicts[label_degree >= 20] > 2).type(
                     torch.cuda.FloatTensor).sum() * 1.0
-                recall_label = (label_degree >= 20).sum()
+                recall_label_20 = (label_degree >= 20).sum()
+
+                recall_pred_15 = (predicts[label_degree >= 15] > 1).type(
+                    torch.cuda.FloatTensor).sum() * 1.0
+                recall_label_15 = (label_degree >= 15).sum()
 
                 for t in range(num_classes+1):
                     for p in range(num_classes+1):
@@ -366,13 +386,17 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
 
                 reduced_loss = reduce_tensor(loss.data)
                 reduced_acc = reduce_tensor(acc.data)
-                reduced_pred_20 = reduce_tensor(recall_pred.data)
-                reduced_label_20 = reduce_tensor(recall_label)
+                reduced_pred_20 = reduce_tensor(recall_pred_20.data)
+                reduced_label_20 = reduce_tensor(recall_label_20)
+                reduced_pred_15 = reduce_tensor(recall_pred_15.data)
+                reduced_label_15 = reduce_tensor(recall_label_15)
 
                 eval_loss.update(to_python_float(reduced_loss))
                 eval_acc.update(to_python_float(reduced_acc))
-                eval_pred_posit.update(to_python_float(reduced_pred_20))
-                eval_label_posit.update(to_python_float(reduced_label_20))
+                eval_recall_pred_20.update(to_python_float(reduced_pred_20))
+                eval_recall_label_20.update(to_python_float(reduced_label_20))
+                eval_recall_pred_15.update(to_python_float(reduced_pred_15))
+                eval_recall_label_15.update(to_python_float(reduced_label_15))
 
                 if args.local_rank == 0:
                     time_spent = time.time() - time_now
@@ -388,16 +412,20 @@ def valid_epoch(summary, summary_writer, epoch, model, loss_fn, dataloader_valid
                 img, target, label, label_degree = prefetcher.next()
 
     if args.local_rank == 0:
-        recall = eval_pred_posit.sum/float(eval_label_posit.sum)
+
+        recall_20 = eval_recall_pred_20.sum/float(eval_recall_label_20.sum)
+        recall_15 = eval_recall_pred_15.sum / float(eval_recall_label_15.sum)
+
         summary['confusion_matrix'] = plot_confusion_matrix(
             confusion_matrix.matrix,
             cfg['labels'],
             tensor_name='Confusion matrix')
         summary['loss'] = eval_loss.avg
-        summary['recall'] = recall
+        summary['recall_20'] = recall_20
+        summary['recall_15'] = recall_15
         # summary['acc'] = acc_sum / (steps * (batch_size))
         summary['acc'] = eval_acc.avg
-        print("Recall >=20:", recall)
+        print("Recall >=20:", recall_20, "Recall >=15:", recall_15)
     return summary
 
 
@@ -536,19 +564,20 @@ def run():
                 summary_writer.add_scalar(
                     'valid/acc', summary_valid['acc'], epoch)
                 summary_writer.add_scalar(
-                    'valid/recall', summary_valid['recall'], epoch)
+                    'valid/recall_20', summary_valid['recall_20'], epoch)
+                summary_writer.add_scalar(
+                    'valid/recall_15', summary_valid['recall_15'], epoch)
                 summary_writer.add_figure(
                     'valid/confusion matrix', summary_valid['confusion_matrix'], epoch)
                 summary_valid['confusion_matrix'].savefig(
                     log_path_cm+'/valid_confusion_matrix_'+str(epoch)+'.png')
         if args.local_rank == 0:
-            if summary_valid['recall'] > 0.85:
-                loss_valid_best_recall = summary_valid['recall']
+            if summary_valid['recall_20'] >= 0.9 and summary_valid['recall_15'] > 0.85:
                 torch.save({'epoch': summary_train['epoch'],
                             'step': summary_train['step'],
                             'state_dict': model.module.state_dict()},
                            os.path.join(ckpt_path_save, str(summary_train['epoch'])+'_recall_' +
-                                        str(summary_valid['recall']) + '.ckpt'))
+                                        str(summary_valid['recall_20']) + str(summary_valid['recall_15'])+'.ckpt'))
                 summary_writer.flush()
                 continue
             if summary_valid['loss'] < loss_valid_best:
